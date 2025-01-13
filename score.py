@@ -22,19 +22,27 @@ import os
 from pathlib import Path
 
 import numpy as np
-from torchvision.datasets import CIFAR10
+import torch
+from torchvision.datasets import CIFAR10, CIFAR100
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--savedir", default="exp/cifar10", type=str)
+parser.add_argument("--dataset", default="none", type=str)
+parser.add_argument("--sample_size", default=1000, type=int)
+parser.add_argument("--seed", default=42, type=int)
 args = parser.parse_args()
 
 
 def load_one(path):
+
     """
     This loads a logits and converts it to a scored prediction.
     """
+    print(path)
+
     opredictions = np.load(os.path.join(path, "logits.npy"))  # [n_examples, n_augs, n_classes]
 
+    # computing predictions (softmax) w/
     # Be exceptionally careful.
     # Numerically stable everything, as described in the paper.
     predictions = opredictions - np.max(opredictions, axis=-1, keepdims=True)
@@ -56,15 +64,32 @@ def load_one(path):
 
 
 def get_labels():
-    datadir = Path().home() / "opt/data/cifar"
-    train_ds = CIFAR10(root=datadir, train=True, download=True)
-    return np.array(train_ds.targets)
+
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+
+    datadir = Path().home() / "dataset"
+    
+    if args.dataset == "cifar10":
+        train_ds = CIFAR10(root=datadir, train=True, download=True)
+    elif args.dataset == "cifar100":
+        train_ds = CIFAR100(root=datadir, train=True, download=True)
+    else:
+        raise ValueError("undefined dataset")
+
+    indices = np.random.choice(len(train_ds), args.sample_size, replace=False)
+    # print(indices[:100])
+
+    sampled_labels = np.array(train_ds.targets)[indices]
+    return sampled_labels
 
 
 def load_stats():
+    print("calculating scores... ")
     with mp.Pool(8) as p:
         p.map(load_one, [os.path.join(args.savedir, x) for x in os.listdir(args.savedir)])
 
 
 if __name__ == "__main__":
+
     load_stats()

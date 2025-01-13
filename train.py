@@ -16,23 +16,29 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torchvision import models, transforms
-from torchvision.datasets import CIFAR10
+from torchvision.datasets import CIFAR10, CIFAR100
 from tqdm import tqdm
 
 from wide_resnet import WideResNet
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--model", default="resnet50", type=str)
+parser.add_argument("--dataset", default="none", type=str)
 parser.add_argument("--lr", default=0.1, type=float)
 parser.add_argument("--epochs", default=1, type=int)
 parser.add_argument("--n_shadows", default=16, type=int)
 parser.add_argument("--shadow_id", default=1, type=int)
-parser.add_argument("--model", default="resnet18", type=str)
 parser.add_argument("--pkeep", default=0.5, type=float)
 parser.add_argument("--savedir", default="exp/cifar10", type=str)
 parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
 
 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps")
+
+cifar10_mean = (0.4914, 0.4822, 0.4465)
+cifar10_std = (0.2023, 0.1994, 0.2010)
+cifar100_mean = (0.5071, 0.4867, 0.4408)
+cifar100_std = (0.2675, 0.2565, 0.2761)
 
 
 def run():
@@ -45,24 +51,40 @@ def run():
     wandb.config.update(args)
 
     # Dataset
+    if args.dataset == "cifar10":
+        _mean = cifar10_mean
+        _std = cifar10_std
+    elif args.dataset == "cifar100":
+        _mean = cifar100_mean
+        _std = cifar100_std
+    else: 
+        raise ValueError(f"Unsupported dataset: {args.dataset}")
+
     train_transform = transforms.Compose(
         [
             transforms.RandomHorizontalFlip(),
             transforms.RandomCrop(32, padding=4),
             transforms.ToTensor(),
-            transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616]),
+            transforms.Normalize(_mean, _std),
         ]
     )
     test_transform = transforms.Compose(
         [
             transforms.ToTensor(),
-            transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616]),
+            transforms.Normalize(_mean, _std),
         ]
     )
-    datadir = Path().home() / "opt/data/cifar"
-    train_ds = CIFAR10(root=datadir, train=True, download=True, transform=train_transform)
-    test_ds = CIFAR10(root=datadir, train=False, download=True, transform=test_transform)
-
+    datadir = Path().home() / "dataset"
+    print(f"import {args.dataset}...")
+    if args.dataset == "cifar10":
+        train_ds = CIFAR10(root=datadir, train=True, download=True, transform=train_transform)
+        test_ds = CIFAR10(root=datadir, train=False, download=True, transform=test_transform)
+    elif args.dataset == "cifar100":
+        train_ds = CIFAR100(root=datadir, train=True, download=True, transform=train_transform)
+        test_ds = CIFAR100(root=datadir, train=False, download=True, transform=test_transform)
+    else:
+        raise ValueError("undefined dataset")
+    
     # Compute the IN / OUT subset:
     # If we run each experiment independently then even after a lot of trials
     # there will still probably be some examples that were always included
@@ -90,19 +112,25 @@ def run():
     test_dl = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=4)
 
     # Model
-    if args.model == "wresnet28-2":
-        m = WideResNet(28, 2, 0.0, 10)
-    elif args.model == "wresnet28-10":
-        m = WideResNet(28, 10, 0.3, 10)
-    elif args.model == "resnet18":
-        m = models.resnet18(weights=None, num_classes=10)
-        m.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-        m.maxpool = nn.Identity()
+
+    print('==> Building model..')
+    if args.dataset == "cifar10":
+        n_classes = 10 
+    elif args.dataset == "cifar100":
+        n_classes = 100
+    else: 
+        raise ValueError(f"Unsupported dataset: {args.dataset}")
+
+    if args.model == 'resnet50':
+        m = models.resnet50(pretrained=True)
+        m.fc = nn.Linear(m.fc.in_features, n_classes)
     else:
         raise NotImplementedError
+    
     m = m.to(DEVICE)
 
-    optim = torch.optim.SGD(m.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    # optim = torch.optim.SGD(m.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)  # ASIS
+    optim = torch.optim.AdamW(m.parameters(), lr=args.lr, weight_decay=0.01)                # TOBE
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=args.epochs)
 
     # Train
@@ -124,7 +152,8 @@ def run():
 
         wandb.log({"loss": loss_total / len(train_dl)})
 
-    print(f"[test] acc_test: {get_acc(m, test_dl):.4f}")
+        print(f"[test] acc_test: {get_acc(m, test_dl):.4f}")
+
     wandb.log({"acc_test": get_acc(m, test_dl)})
 
     savedir = os.path.join(args.savedir, str(args.shadow_id))
