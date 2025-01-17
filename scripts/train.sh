@@ -1,15 +1,27 @@
 #!/bin/bash
 
+# Default values
 n_shadows=128
+model="resnet50"
+dataset="cifar10"
+epochs=20
+lr=0.001
+
+while [[ "$#" -gt 0 ]]; do
+  case $1 in
+    --n_shadows) n_shadows="$2"; shift ;;
+    --model) model="$2"; shift ;;
+    --dataset) dataset="$2"; shift ;;
+    --epochs) epochs="$2"; shift ;;
+    --lr) lr="$2"; shift ;;
+    *) echo "Unknown parameter: $1"; exit 1 ;;
+  esac
+  shift
+done
+
 gpus=(0 1 2 3 4 5 6 7)
 shadows_per_gpu=$((n_shadows / ${#gpus[@]}))
-
-model="resnet50"
-dataset="cifar100"
 savedir="exp/${model}_${dataset}"
-
-epochs=40
-lr=0.001
 
 for ((i=0; i<$n_shadows; i++)); do
   gpu_id=${gpus[$((i % ${#gpus[@]}))]} 
